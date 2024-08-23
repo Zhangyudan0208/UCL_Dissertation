@@ -1,0 +1,392 @@
+---
+title: "Landsuse"
+output: html_document
+date: "2024-07-07"
+---
+
+```{r}
+library(terra)
+library(sf)
+library(progress)
+library(dplyr)
+library(readxl)
+```
+1.Import of national land use data
+```{r}
+# Setting the path to the TIFF file
+tiff_file <- "D:/Term3/dessertation/R/R_process/Landuse_2022.tif"
+
+# Reading raster data
+landuse_raster2022 <- rast(tiff_file)
+
+```
+
+```{r}
+print(landuse_raster2022)
+```
+
+
+2.Import national shp with all prefecture-level cities
+
+```{r}
+# Set the path to the shapefile file
+shapefile_path <- "D:/Term3/dessertation/R/R_process/Chinamap_2019/Municipalities_isoprojections.shp"
+
+# Read shapefile
+china_municipalities <- st_read(shapefile_path)
+
+head(china_municipalities)
+```
+
+
+```{r}
+# CRS for converting vector data to raster data in uniform coordinates
+china_municipalities <- st_transform(china_municipalities, crs(landuse_raster2022))
+```
+
+
+3.Trimming land use data with prefecture shp and calculating the area of each type of land in each prefecture
+
+```{r}
+
+# Create an empty data box to store the results
+results <- data.frame()
+
+# Set pixel area (square meters)
+pixel_area <- 30 * 30
+
+# Creating a progress bar
+pb <- progress_bar$new(
+  format = "  处理地级市 [:bar] :percent 完成。 已耗时: :elapsed, 预计剩余时间: :eta",
+  total = nrow(china_municipalities), clear = FALSE, width = 60
+)
+
+# Iterate through each prefecture level city
+for (i in 1:nrow(china_municipalities)) {
+  # Get the polygon for the current prefecture
+  city_polygon <- china_municipalities[i, ]
+  
+  # Cropping raster data using polygons
+  cropped_raster <- crop(landuse_raster2022, city_polygon)
+  masked_raster <- mask(cropped_raster, city_polygon)
+  
+  # Calculation of unique values and their frequency
+  unique_values <- freq(masked_raster)
+  
+  # Converting unique values and their frequency into dataframes
+  unique_values_df <- as.data.frame(unique_values)
+  
+  # Calculation of the area of each land-use type (square meters)
+  unique_values_df$area <- unique_values_df$count * pixel_area
+  
+  # Add information about prefecture-level cities
+  unique_values_df$省代码 <- china_municipalities$省代码[i]
+  unique_values_df$省 <- china_municipalities$省[i]
+  unique_values_df$市代码 <- china_municipalities$市代码[i]
+  unique_values_df$市 <- china_municipalities$市[i]
+  unique_values_df$类型 <- unique_values_df$value
+  unique_values_df$geometry <- st_geometry(city_polygon)
+  
+  # Add the current prefecture-level city results to the total results
+  results <- rbind(results, unique_values_df)
+  
+  # Update progress bar
+  pb$tick()
+}
+
+# View Results
+print(results)
+```
+
+
+4.Delete the coordinates from the generated table and store it as a normal data set
+
+```{r}
+# Manual deletion of geometric columns
+results_no_geometry <- results[, !names(results) %in% c("geometry")]
+
+# Save results
+write.csv(results_no_geometry, "landuse_area_by_city2022.csv", row.names = FALSE)
+
+```
+5. Creating category mappings First, a category mapping is created that corresponds each value to a specific land use type and its classification index.
+
+```{r}
+# Creating Category Mappings
+category_mapping <- data.frame(
+  value = c(2, 4, 5, 1, 8),
+  category = c("林地、草地、水域", "林地、草地、水域", "林地、草地、水域", "耕地", "建筑用地"),
+  index = c(2, 2, 2, 3, 4)
+)
+
+# Merge category mapping to results_no_geometry
+results_no_geometry <- merge(results_no_geometry, category_mapping, by = "value", all.x = TRUE)
+```
+
+6. Calculate the percentage of area of each land-use type (Ci) for each prefecture-level municipality.
+```{r}
+# Calculate the total area of each prefecture, including all types of
+total_area_per_city <- results_no_geometry %>%
+  group_by(市代码) %>%
+  summarise(total_area = sum(area))
+
+# Combined total area to results_no_geometry
+results_no_geometry <- merge(results_no_geometry, total_area_per_city, by = "市代码")
+
+# Calculate the percentage of area of each land-use type
+results_no_geometry$area_percentage <- (results_no_geometry$area / results_no_geometry$total_area) * 100
+
+```
+7. Calculate the level of land-use intensity for each prefecture-level city
+The level of land use intensity was calculated based on the percentage of area of each land use type (Ci) and the grading index (Ai) for each prefecture-level city.
+```{r}
+# Calculate the level of land-use intensity for each prefecture-level city, and only calculate the type that contains the index
+land_use_intensity <- results_no_geometry %>%
+  filter(!is.na(index)) %>%
+  group_by(市代码, 省代码, 省, 市) %>%
+  summarise(土地利用强度水平 = sum(area_percentage * index))
+
+print(land_use_intensity)
+```
+
+```{r}
+write.csv(land_use_intensity, "land_use_intensity_by_city2022.csv", row.names = FALSE)
+```
+
+=======
+Provincial level county Calculation
+
+```{r}
+# Setting the path to the TIFF file and Reading raster data
+tiff_file <- "D:/Term3/dessertation/R/R_process/CLCD_v01_2022_albert_hainan.tif"
+landuse_hainan2022 <- rast(tiff_file)
+```
+```{r}
+tiff_file <- "D:/Term3/dessertation/R/R_process/CLCD_v01_2022_albert_qinghai.tif"
+landuse_qinghai2022 <- rast(tiff_file)
+```
+```{r}
+tiff_file <- "D:/Term3/dessertation/R/R_process/CLCD_v01_2022_albert_xizang.tif"
+landuse_xizang2022 <- rast(tiff_file)
+```
+```{r}
+tiff_file <- "D:/Term3/dessertation/R/R_process/CLCD_v01_2022_albert_xinjiang.tif"
+landuse_xinjiang2022 <- rast(tiff_file)
+```
+```{r}
+# Setting the path to the TIFF file
+tiff_files <- list(
+  hainan = "D:/Term3/dessertation/R/R_process/CLCD_v01_2006_albert_hainan.tif",
+  qinghai = "D:/Term3/dessertation/R/R_process/CLCD_v01_2006_albert_qinghai.tif",
+  xizang = "D:/Term3/dessertation/R/R_process/CLCD_v01_2006_albert_xizang.tif",
+  xinjiang = "D:/Term3/dessertation/R/R_process/CLCD_v01_2006_albert_xinjiang.tif"
+)
+
+# Set pixel area (square meters)
+pixel_area <- 30 * 30
+
+# Create an empty data box to store the results
+results <- data.frame()
+
+# Iterate through the TIFF files for each province
+for (province in names(tiff_files)) {
+  # Reading raster data
+  landuse_raster <- rast(tiff_files[[province]])
+  
+  # Calculation of unique values and their frequency
+  unique_values <- freq(landuse_raster)
+  
+  # Converting unique values and their frequency into dataframes
+  unique_values_df <- as.data.frame(unique_values)
+  
+  # Calculation of the area of each land-use type (square meters)
+  unique_values_df$area <- unique_values_df$count * pixel_area
+  
+  # Add province information
+  unique_values_df$省 <- province
+  
+  # Add results from the current province to the total results
+  results <- rbind(results, unique_values_df)
+}
+
+# View Results
+print(results)
+```
+```{r}
+# Setting the path to the TIFF file
+tiff_files <- list(
+  hainan = "D:/Term3/dessertation/R/R_process/CLCD_v01_2022_albert_hainan.tif",
+  qinghai = "D:/Term3/dessertation/R/R_process/CLCD_v01_2022_albert_qinghai.tif",
+  xizang = "D:/Term3/dessertation/R/R_process/CLCD_v01_2022_albert_xizang.tif",
+  xinjiang = "D:/Term3/dessertation/R/R_process/CLCD_v01_2022_albert_xinjiang.tif"
+)
+
+# Creating Category Mappings
+category_mapping <- data.frame(
+  value = c(2, 4, 5, 1, 8),
+  category = c("林地、草地、水域", "林地、草地、水域", "林地、草地、水域", "耕地", "建筑用地"),
+  index = c(2, 2, 2, 3, 4)
+)
+
+# Set pixel area (square meters)
+pixel_area <- 30 * 30
+
+# Create an empty data box to store the results
+results <- data.frame()
+
+# Creating a progress bar
+pb <- progress_bar$new(
+  format = "  处理省份 [:bar] :percent 完成。 已耗时: :elapsed, 预计剩余时间: :eta",
+  total = length(tiff_files), clear = FALSE, width = 60
+)
+
+# Iterate through the TIFF files for each province
+for (province in names(tiff_files)) {
+  # Reading raster data
+  landuse_raster <- rast(tiff_files[[province]])
+  
+  # Calculation of unique values and their frequency
+  unique_values <- freq(landuse_raster)
+  
+  # Converting unique values and their frequency into dataframes
+  unique_values_df <- as.data.frame(unique_values)
+  
+  # Calculation of the area of each land-use type (square meters)
+  unique_values_df$area <- unique_values_df$count * pixel_area
+  
+  # Add province information
+  unique_values_df$省 <- province
+  
+  # Add results from the current province to the total results
+  results <- rbind(results, unique_values_df)
+  
+  # Update progress bar
+  pb$tick()
+}
+
+# Calculate the total area of each province, including all types of
+total_area_per_province <- results %>%
+  group_by(省) %>%
+  summarise(total_area = sum(area))
+
+# Combined total area to results
+results <- merge(results, total_area_per_province, by = "省")
+
+# Merge category mapping to results
+results <- merge(results, category_mapping, by = "value", all.x = TRUE)
+
+# Check that the merged data frame is correct
+print(head(results))
+
+# Calculate the percentage of area of each land-use type
+results$area_percentage <- (results$area / results$total_area) * 100
+
+# Calculate the level of land-use intensity for each province, only for the types that include the index
+land_use_intensity <- results %>%
+  filter(!is.na(index)) %>%
+  group_by(省) %>%
+  summarise(土地利用强度水平 = sum(area_percentage * index))
+
+print(land_use_intensity)
+
+write.csv(land_use_intensity, "land_use_intensity_by_province2022.csv", row.names = FALSE)
+
+```
+
+
+
+=========================
+Generation of 285 research units for this study
+```{r}
+shapefile_path <- "D:/Term3/dessertation/R/R_process/Chinamap_2019/Municipalities_isoprojections.shp"
+municipalities <- st_read(shapefile_path)
+
+```
+
+Filter and merge prefecture-level cities with specified province codes shapefile
+
+```{r}
+# Filtering the specified province code
+selected_provinces <- municipalities %>%
+  filter(省代码 %in% c("540000", "460000", "650000", "630000"))
+
+# The shapefile for the rest of the prefecture level cities
+remaining_municipalities <- municipalities %>%
+  filter(!(省代码 %in% c("540000", "460000", "650000", "630000")))
+
+# Combine the prefecture level cities for each province code shapefile
+merged_provinces <- selected_provinces %>%
+  group_by(省代码) %>%
+  summarise(geometry = st_union(geometry), .groups = 'drop')
+
+```
+Modify the attribute table of the merged shapefile
+
+```{r}
+# Modify the property sheet
+merged_provinces <- merged_provinces %>%
+  mutate(
+    市代码 = 省代码,
+    省 = case_when(
+      省代码 == "540000" ~ "西藏自治区",
+      省代码 == "460000" ~ "海南省",
+      省代码 == "650000" ~ "新疆维吾尔自治区",
+      省代码 == "630000" ~ "青海省"
+    ),
+    市 = case_when(
+      省代码 == "540000" ~ "西藏自治区",
+      省代码 == "460000" ~ "海南省",
+      省代码 == "650000" ~ "新疆维吾尔自治区",
+      省代码 == "630000" ~ "青海省"
+    ),
+    类型 = "省",
+    area = "0"
+  )
+
+```
+
+```{r}
+# Merge all shapefile
+final_shapefile <- rbind(merged_provinces, remaining_municipalities)
+```
+
+```{r}
+colnames(final_shapefile) <- c("Province_code", "geometry", "City_code", "Province", "City", "Type", "Area")
+```
+
+```{r}
+# Setting the path to the Excel file
+excel_path <- "D:/Term3/dessertation/R/R_process/Name.xlsx"
+
+# Reading Excel files
+name_data <- read_excel(excel_path)
+```
+
+```{r}
+# Convert the Citycode column to a character type to ensure a match with the City_code column
+name_data <- name_data %>%
+  mutate(Citycode = as.character(Citycode))
+# Convert City_code column to character type
+final_shapefile <- final_shapefile %>%
+  mutate(City_code = as.character(City_code))
+
+# Connecting two datasets
+final_shapefile <- final_shapefile %>%
+  left_join(name_data, by = c("City_code" = "Citycode"))
+
+# View the data structure after the connection
+print(final_shapefile)
+
+```
+```{r}
+# Deletes the specified column
+final_shapefile <- final_shapefile %>%
+  select(-Province, -City, -Type, -Name_of_Regions)
+```
+
+```{r}
+# Save results
+output_path <- "D:/Term3/dessertation/R/R_process/Chinamap_2019/7.9/Merged_Municipalities.shp"
+st_write(final_shapefile, output_path)
+```
+
